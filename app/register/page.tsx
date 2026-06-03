@@ -5,185 +5,142 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 
 export default function RegisterPage() {
+  const [nama, setNama] = useState('');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [phone, setPhone] = useState(''); // State baru untuk menampung nomor telepon
+  const [setuju, setSetuju] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [role, setRole] = useState<'pelanggan' | 'admin' | 'kasir'>('pelanggan');
   const router = useRouter();
 
-  // State Form Pengguna
-  const [fullName, setFullName] = useState('Budi Santoso');
-  const [email, setEmail] = useState('budi@gmail.com');
-  const [password, setPassword] = useState('password123');
-  const [agreeTerms, setAgreeTerms] = useState(false);
-
-  // --- SINGKRONISASI 3 ROLE UNTUK FOLDER DAN BACKEND ---
-  const [role, setRole] = useState<'customer' | 'kasir' | 'admin'>('customer');
-  const [isLoading, setIsLoading] = useState(false);
-  const [errorMessage, setErrorMessage] = useState('');
-
-  const handleRegisterSubmit = async (e: React.FormEvent) => {
+  const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
-    setErrorMessage('');
-
-    if (!agreeTerms) {
-      setErrorMessage('Anda harus menyetujui seluruh syarat dan ketentuan layanan.');
+    if (!setuju) {
+      alert('Anda harus menyetujui syarat dan ketentuan layanan.');
       return;
     }
-
     setIsLoading(true);
 
-    const payloadBackend = {
-      name: fullName,
-      email: email,
-      password: password,
-      role: role 
-    };
-
-    console.log('Mengirim data pendaftaran ke Backend:', payloadBackend);
-
     try {
-      // Simulasi delay response API backend selama 1 detik
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+      // Menembak ke endpoint tunggal sesuai dengan spesifikasi cURL backend Anda
+      const response = await fetch('https://backend-kuliner.up.railway.app/api/auth/register', {
+        method: 'POST',
+        headers: { 
+          'accept': '*/*',
+          'Content-Type': 'application/json' 
+        },
+        body: JSON.stringify({ 
+          name: nama, 
+          email: email, 
+          password: password,
+          phone: phone,             // Mengirim data phone ke backend
+          role: role.toUpperCase()  // Mengubah 'pelanggan' -> 'PELANGGAN' sesuai kebutuhan backend
+        }),
+      });
 
-      // Simpan session info ke LocalStorage
-      localStorage.setItem('rasanusa_user_session', JSON.stringify({
-        name: fullName,
-        email: email,
-        role: role
-      }));
-
-      alert(`Pendaftaran Akun Berhasil sebagai ${role.toUpperCase()}!`);
-      
-      // Otomatis mengarahkan user masuk ke halaman sesuai folder role masing-masing
-      if (role === 'kasir') {
-        router.push('/kasir');
-      } else if (role === 'admin') {
-        router.push('/admin');
-      } else {
-        router.push('/customer');
+      const contentType = response.headers.get("content-type");
+      if (!contentType || !contentType.includes("application/json")) {
+        throw new Error(`Server mengembalikan respon non-JSON (Status: ${response.status}). Pastikan rute /api/auth/register tersedia.`);
       }
 
-    } catch (err: any) {
-      setErrorMessage(err.message || 'Terjadi kesalahan koneksi sistem, coba lagi.');
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || `Gagal mendaftarkan akun ${role}.`);
+
+      alert(`Registrasi Berhasil! Akun ${data.data.name} sebagai ${data.data.role} siap digunakan.`);
+      
+      // Mengarahkan pengguna langsung ke halaman utama/login setelah sukses
+      router.push('/'); 
+    } catch (error: any) {
+      alert(error.message);
     } finally {
       setIsLoading(false);
     }
   };
 
   return (
-    <div className="min-h-screen bg-[#F95006] flex items-center justify-center p-4 antialiased">
-      <div className="bg-[#FFFDF9] rounded-[36px] max-w-md w-full px-10 py-12 shadow-2xl text-[#1E293B]">
-        
-        {/* Teks Judul */}
-        <div className="text-center mb-8">
-          <h2 className="text-3xl font-black tracking-tight text-slate-900">
-            Buat Akun <span className="text-[#F95006]">Baru</span>
-          </h2>
-          <p className="text-xs font-semibold text-slate-400 mt-2">
-            Sudah punya akun?{' '}
-            <Link href="/login" className="text-[#F95006] font-bold hover:underline">
-              Masuk di sini
-            </Link>
-          </p>
+    <div className="min-h-screen bg-orange-600 flex items-center justify-center p-4 font-sans">
+      <div className="bg-[#fffdfa] rounded-3xl max-w-md w-full p-8 md:p-10 shadow-xl text-center">
+        <h2 className="text-3xl font-black text-gray-950 tracking-tight">
+          Buat Akun <span className="text-orange-600">Baru</span>
+        </h2>
+        <p className="text-sm text-gray-500 mt-2 font-medium">
+          Sudah punya akun?{' '}
+          <Link href="/" className="text-orange-600 font-bold hover:underline">
+            Masuk di sini
+          </Link>
+        </p>
+
+        {/* Tab Selector Role */}
+        <div className="grid grid-cols-3 gap-2 mt-6 p-1 bg-gray-100 rounded-xl">
+          {(['pelanggan', 'admin', 'kasir'] as const).map((r) => (
+            <button
+              key={r} type="button" onClick={() => setRole(r)}
+              className={`py-2 text-xs font-bold rounded-lg uppercase tracking-wider transition-all ${
+                role === r ? 'bg-orange-600 text-white shadow-sm' : 'text-gray-500 hover:text-gray-800'
+              }`}
+            >
+              {r}
+            </button>
+          ))}
         </div>
 
-        {/* Notifikasi Error jika ada */}
-        {errorMessage && (
-          <div className="mb-4 p-3 bg-red-50 text-red-600 text-xs font-bold rounded-xl border border-red-100 text-center">
-            ⚠️ {errorMessage}
-          </div>
-        )}
-
-        {/* Form Input Konten */}
-        <form onSubmit={handleRegisterSubmit} className="space-y-4">
-          
-          {/* Input Nama Lengkap */}
+        {/* Form Pendaftaran */}
+        <form onSubmit={handleRegister} className="text-left mt-6 space-y-4">
           <div>
-            <label className="block text-[10px] font-extrabold text-slate-500 uppercase tracking-wider mb-1.5">
-              Nama Lengkap
-            </label>
-            <input
-              type="text"
-              required
-              value={fullName}
-              onChange={(e) => setFullName(e.target.value)}
-              placeholder="Budi Santoso"
-              className="w-full px-4 py-3 rounded-xl border border-slate-100 bg-[#EFF5FF]/40 text-xs font-medium outline-none text-slate-700"
+            <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1.5">Nama Lengkap</label>
+            <input 
+              type="text" required placeholder="Ryu" value={nama} onChange={(e) => setNama(e.target.value)}
+              className="w-full px-4 py-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-orange-500 text-sm text-gray-800 bg-gray-50/50"
             />
           </div>
 
-          {/* Input Alamat Email */}
+          {/* Input Baru: Nomor Telepon */}
           <div>
-            <label className="block text-[10px] font-extrabold text-slate-500 uppercase tracking-wider mb-1.5">
-              Alamat Email
-            </label>
-            <input
-              type="email"
-              required
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="budi@gmail.com"
-              className="w-full px-4 py-3 rounded-xl border border-slate-100 bg-[#EFF5FF]/60 text-xs font-medium outline-none text-slate-700 focus:bg-[#EFF5FF]"
+            <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1.5">Nomor Telepon</label>
+            <input 
+              type="tel" required placeholder="81234567890" value={phone} onChange={(e) => setPhone(e.target.value)}
+              className="w-full px-4 py-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-orange-500 text-sm text-gray-800 bg-gray-50/50"
             />
           </div>
 
-          {/* INPUT DROPDOWN 3 ROLE */}
           <div>
-            <label className="block text-[10px] font-extrabold text-slate-500 uppercase tracking-wider mb-1.5">
-              Daftar Sebagai (Peran Hak Akses)
-            </label>
-            <select
-              value={role}
-              onChange={(e) => setRole(e.target.value as 'customer' | 'kasir' | 'admin')}
-              className="w-full px-4 py-3 rounded-xl border border-slate-100 bg-[#EFF5FF]/60 text-xs font-black text-slate-700 outline-none cursor-pointer focus:bg-[#EFF5FF]"
-            >
-              <option value="customer">🍽️ Pelanggan / Customer Restoran</option>
-              <option value="kasir">🖥️ Petugas Kasir / Admin POS</option>
-              <option value="admin">👑 Owner / Super Admin Resto</option>
-            </select>
-          </div>
-
-          {/* Input Kata Sandi */}
-          <div>
-            <label className="block text-[10px] font-extrabold text-slate-500 uppercase tracking-wider mb-1.5">
-              Kata Sandi
-            </label>
-            <input
-              type="password"
-              required
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="••••••••••••"
-              className="w-full px-4 py-3 rounded-xl border border-slate-100 bg-[#EFF5FF]/60 text-xs font-medium outline-none text-slate-700 focus:bg-[#EFF5FF]"
+            <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1.5">Alamat Email</label>
+            <input 
+              type="email" required placeholder="kokoci@gmail.com" value={email} onChange={(e) => setEmail(e.target.value)}
+              className="w-full px-4 py-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-orange-500 text-sm text-gray-800 bg-gray-50/50"
             />
           </div>
 
-          {/* Checkbox Persetujuan Syarat & Ketentuan */}
-          <div className="flex items-start gap-2.5 pt-1">
-            <input
-              type="checkbox"
-              id="terms"
-              checked={agreeTerms}
-              onChange={(e) => setAgreeTerms(e.target.checked)}
-              className="mt-0.5 rounded border-slate-300 text-[#F95006] focus:ring-[#F95006] w-3.5 h-3.5 cursor-pointer"
+          <div>
+            <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1.5">Kata Sandi</label>
+            <input 
+              type="password" required placeholder="••••••••••••" value={password} onChange={(e) => setPassword(e.target.value)}
+              className="w-full px-4 py-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-orange-500 text-sm text-gray-800 bg-gray-50/50"
             />
-            <label htmlFor="terms" className="text-[10px] font-semibold text-slate-500 leading-tight cursor-pointer select-none">
+          </div>
+
+          <div className="flex items-start gap-2 pt-1">
+            <input 
+              type="checkbox" id="agree" checked={setuju} onChange={(e) => setSetuju(e.target.checked)}
+              className="w-4 h-4 accent-orange-600 cursor-pointer rounded mt-0.5" 
+            />
+            <label htmlFor="agree" className="text-xs text-gray-500 cursor-pointer select-none font-medium leading-tight">
               Saya menyetujui seluruh syarat dan ketentuan layanan kuliner.
             </label>
           </div>
 
-          {/* Tombol Utama Kirim Data */}
-          <button
-            type="submit"
-            disabled={isLoading}
-            className="w-full bg-[#E45B06] hover:bg-slate-900 text-white font-extrabold text-xs tracking-wider uppercase py-3.5 rounded-xl shadow-lg transition-all active:scale-[0.98] mt-2 disabled:bg-slate-400"
+          <button 
+            type="submit" disabled={isLoading}
+            className="w-full bg-orange-600 hover:bg-orange-700 text-white font-bold py-3.5 rounded-xl transition shadow-lg shadow-orange-600/20 text-sm uppercase tracking-wider disabled:opacity-50"
           >
-            {isLoading ? 'Memproses Pendaftaran...' : 'Daftar Sekarang'}
+            {isLoading ? 'Memproses Akun...' : `Daftar Sebagai ${role}`}
           </button>
         </form>
 
-        {/* Hak Cipta Footer */}
-        <p className="text-[10px] text-center text-slate-400 font-semibold mt-8 tracking-wide">
-          © 2026 SINAR.REMAJA Resto App Router
-        </p>
-
+        <div className="mt-8 text-center text-xs text-gray-400 font-medium">
+          © 2026 RASANUSA Resto App Router
+        </div>
       </div>
     </div>
   );

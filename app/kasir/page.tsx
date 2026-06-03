@@ -1,334 +1,244 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 
-interface FoodItem {
-  id: string | number;
-  name: string;
-  origin: string;
-  price: number;
-  category: string;
-  image: string;
-}
+const API_BASE_URL = 'https://backend-kuliner.up.railway.app/api';
+const ENDPOINT_PESANAN = '/pesanan';
 
-interface CartItem {
-  food: FoodItem;
-  quantity: number;
-}
+type DetailPesanan = {
+  id_menu?: number;
+  nama_menu?: string;
+  name?: string;
+  qty?: number;
+  jumlah?: number;
+  jumlah_pesanan?: number;
+  subtotal?: number;
+};
 
-interface Order {
-  id: string;
-  items: CartItem[];
-  total: number;
-  method: 'qris' | 'cash' | 'none';
-  status: 'Belum Bayar' | 'Lunas';
-  timestamp: string;
-}
+type Transaksi = {
+  id_pesanan: string;
+  nama_pelanggan: string;
+  nomor_meja: string;
+  metode_pembayaran: 'Tunai' | 'QRIS';
+  total_harga: number;
+  status_pesanan: string;
+  waktu: string;
+  detail: DetailPesanan[];
+};
 
-export default function KasirPage() {
-  const [orders, setOrders] = useState<Order[]>([]);
+export default function KasirDashboard() {
+  const router = useRouter();
+  const [antrean, setAntrean] = useState<Transaksi[]>([]);
+  const [totalKasMasuk, setTotalKasMasuk] = useState(0);
+  const [filterStatus, setFilterStatus] = useState<'Belum Bayar' | 'Lunas' | 'Semua'>('Belum Bayar');
 
-  // Mengambil data antrean secara live dari localStorage
-  const loadOrders = () => {
-    const savedOrders = localStorage.getItem('rasanusa_order_store');
-    if (savedOrders) {
-      try {
-        setOrders(JSON.parse(savedOrders));
-      } catch (e) {
-        console.error('Gagal parsing data order', e);
+  const fetchPesananDariBackend = async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}${ENDPOINT_PESANAN}`);
+      if (response.ok) {
+        const result = await response.json();
+        // Mengantisipasi struktur respons bersarang dari server
+        const data = result.data ? result.data : result;
+        if (Array.isArray(data)) {
+          setAntrean(data);
+          hitungTotalLunas(data);
+        }
       }
+    } catch (error) {
+      // Cadangan membaca data lokal browser jika backend offline/terkendala CORS
+      const localData = JSON.parse(localStorage.getItem('simulasi_pesanan') || '[]');
+      setAntrean(localData);
+      hitungTotalLunas(localData);
     }
+  };
+
+  const hitungTotalLunas = (data: Transaksi[]) => {
+    const total = data
+      .filter((t) => t.status_pesanan?.toLowerCase() === 'lunas')
+      .reduce((sum, t) => sum + (Number(t.total_harga) || 0), 0);
+    setTotalKasMasuk(total);
   };
 
   useEffect(() => {
-    loadOrders();
+    fetchPesananDariBackend();
 
-    // Sinkronisasi otomatis antar-tab saat menu menambah orderan baru
-    const handleStorageChange = () => {
-      loadOrders();
+    // Jalur Sinkronisasi Real-Time Instan antar tab browser
+    const channel = new BroadcastChannel('sinar_remaja_order_channel');
+    channel.onmessage = (event) => {
+      if (event.data && event.data.type === 'PESANAN_BARU') {
+        try { 
+          new Audio('https://assets.mixkit.co/active_storage/sfx/2869/2869-500.wav').play(); 
+        } catch(e){}
+        
+        setAntrean((prev) => {
+          const baru = event.data.data;
+          // Hindari duplikasi jika data keburu masuk lewat polling API
+          if (prev.some(t => t.id_pesanan === baru.id_pesanan)) return prev;
+          const updated = [baru, ...prev];
+          hitungTotalLunas(updated);
+          return updated;
+        });
+      }
     };
-    
-    window.addEventListener('storage', handleStorageChange);
-    return () => window.removeEventListener('storage', handleStorageChange);
+
+    // Sinkronisasi background otomatis ke cloud backend setiap 5 detik
+    const interval = setInterval(fetchPesananDariBackend, 5000);
+
+    return () => {
+      channel.close();
+      clearInterval(interval);
+    };
   }, []);
 
-  // Fungsi mengubah status pembayaran (Belum Bayar -> Lunas)
-  const handleMarkAsPaid = (orderId: string) => {
-    const updatedOrders = orders.map((order) => {
-      if (order.id === orderId) {
-        return { ...order, status: 'Lunas' as const };
-      }
-      return order;
+  const konfirmasiLunas = async (idPesanan: string) => {
+    setAntrean((prev) => {
+      const updated = prev.map((t) => {
+        if (t.id_pesanan === idPesanan) {
+          return { ...t, status_pesanan: 'Lunas' };
+        }
+        return t;
+      });
+      localStorage.setItem('simulasi_pesanan', JSON.stringify(updated));
+      hitungTotalLunas(updated);
+      return updated;
     });
-    setOrders(updatedOrders);
-    localStorage.setItem('rasanusa_order_store', JSON.stringify(updatedOrders));
+
+    try {
+      await fetch(`${API_BASE_URL}${ENDPOINT_PESANAN}/${idPesanan}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status_pesanan: 'Lunas' })
+      });
+    } catch(e){}
   };
 
-  // Fungsi menghapus pesanan (Selesai diproses / batalkan)
-  const handleDeleteOrder = (orderId: string) => {
-    if (confirm('Apakah Anda yakin ingin menghapus/menyelesaikan antrean order ini?')) {
-      const updatedOrders = orders.filter((order) => order.id !== orderId);
-      setOrders(updatedOrders);
-      localStorage.setItem('rasanusa_order_store', JSON.stringify(updatedOrders));
-    }
-  };
+  const listTersaring = antrean.filter((t) => {
+    if (!t.status_pesanan) return false;
+    if (filterStatus === 'Semua') return true;
+    return t.status_pesanan.toLowerCase() === filterStatus.toLowerCase();
+  });
 
-  // Fungsi menghapus seluruh antrean sekaligus (reset dashboard)
-  const handleResetAllOrders = () => {
-    if (confirm('PENTING: Hapus seluruh histori antrean kasir hari ini?')) {
-      setOrders([]);
-      localStorage.removeItem('rasanusa_order_store');
-    }
-  };
-
-  // Kalkulasi statistik untuk widget dashboard kasir
-  const totalAntreanAktif = orders.filter(o => o.status === 'Belum Bayar').length;
-  const totalPesananLunas = orders.filter(o => o.status === 'Lunas').length;
-  const totalPendapatanHariIni = orders
-    .filter(o => o.status === 'Lunas')
-    .reduce((sum, current) => sum + current.total, 0);
+  const jumlahAntreanBelumBayar = antrean.filter(t => t.status_pesanan?.toLowerCase() === 'belum bayar').length;
 
   return (
-    <div className="min-h-screen bg-[#F8FAFC] text-[#1E293B] antialiased">
+    <div className="min-h-screen bg-gray-50 text-gray-800 font-sans p-6">
       
-      {/* PROFESSIONAL NAVBAR */}
-      <nav className="bg-white border-b border-slate-100 shadow-sm sticky top-0 z-30">
-        <div className="max-w-7xl mx-auto px-6 h-20 flex items-center justify-between">
-          <div className="flex items-center gap-6">
-            <Link 
-              href="/menu" 
-              className="flex items-center gap-2 text-xs font-bold text-[#EA580C] bg-orange-50 hover:bg-orange-100/70 px-4 py-2.5 rounded-xl border border-orange-100 transition"
-            >
-              📋 Halaman Menu Resto
-            </Link>
-            <div className="h-5 w-px bg-slate-200"></div>
-            <div className="flex items-center gap-3">
-              <span className="text-xl">🖥️</span>
-              <div>
-                <div className="flex items-center gap-2">
-                  <span className="text-sm font-black tracking-tight text-slate-900">SINAR.KASIR</span>
-                  <span className="relative flex h-2 w-2">
-                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                    <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-                  </span>
-                  <span className="text-[10px] font-bold text-emerald-600 tracking-wider uppercase">Monitor Live</span>
-                </div>
-                <p className="text-[10px] text-slate-400 font-semibold">Sistem Manajemen POS Restoran Terintegrasi</p>
-              </div>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-3">
-            <button
-              onClick={handleResetAllOrders}
-              className="text-slate-400 hover:text-red-500 text-xs font-bold px-3 py-2 rounded-lg hover:bg-red-50 transition"
-            >
-              Reset Semua Data
-            </button>
-            <div className="bg-slate-900 text-white text-xs font-mono px-3.5 py-2 rounded-xl border border-slate-800 shadow-sm">
-              {new Date().toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'short' })}
-            </div>
-          </div>
+      {/* Header Kasir dengan Tombol Keluar */}
+      <div className="flex justify-between items-center bg-white p-4 rounded-xl shadow-sm mb-6 border border-gray-200">
+        <div className="flex items-center gap-3">
+          <h1 className="text-xl font-black text-orange-600 tracking-tight">SINAR REMAJA</h1>
+          <span className="bg-green-100 text-green-700 font-bold text-xs px-2.5 py-1 rounded-full border border-green-200">● KASIR AKTIF</span>
         </div>
-      </nav>
-
-      {/* BODY INTERFACE */}
-      <div className="max-w-7xl mx-auto px-6 py-10">
         
-        {/* ROW 1: CORE STATS BENTO WIDGET */}
-        <section className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-10">
-          <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm flex items-center justify-between">
-            <div>
-              <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1">Total Antrean Aktif</p>
-              <h3 className="text-3xl font-black text-slate-900 tracking-tight">{totalAntreanAktif} <span className="text-xs font-medium text-slate-400">pesanan</span></h3>
-            </div>
-            <div className="w-12 h-12 bg-amber-50 rounded-2xl flex items-center justify-center text-xl">⏳</div>
+        <div className="flex items-center gap-4">
+          <div className="text-right text-xs font-medium text-gray-500 hidden sm:block">
+            PETUGAS AKTIF: <span className="font-bold text-gray-900 uppercase">JUNA</span>
           </div>
-
-          <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm flex items-center justify-between">
-            <div>
-              <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1">Pesanan Sukses Lunas</p>
-              <h3 className="text-3xl font-black text-emerald-600 tracking-tight">{totalPesananLunas} <span className="text-xs font-medium text-slate-400">terselesaikan</span></h3>
-            </div>
-            <div className="w-12 h-12 bg-emerald-50 rounded-2xl flex items-center justify-center text-xl">✅</div>
-          </div>
-
-          <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm flex items-center justify-between">
-            <div>
-              <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1">Pendapatan Kasir Hari Ini</p>
-              <h3 className="text-2xl font-black text-slate-900 tracking-tight">Rp {totalPendapatanHariIni.toLocaleString('id-ID')}</h3>
-            </div>
-            <div className="w-12 h-12 bg-blue-50 rounded-2xl flex items-center justify-center text-xl">💰</div>
-          </div>
-        </section>
-
-        {/* ROW 2: MAIN BOARD CONTROL & STREAM */}
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
           
-          {/* COLUMN PANEL KIRI: INFO STATUS & MONITOR */}
-          <div className="lg:col-span-4 space-y-6">
-            <div className="bg-slate-900 text-white p-6 rounded-3xl shadow-xl relative overflow-hidden">
-              <div className="absolute right-0 bottom-0 opacity-10 translate-x-4 translate-y-4 font-black text-9xl pointer-events-none">
-                POS
-              </div>
-              <span className="bg-orange-500 text-white text-[9px] font-black tracking-widest uppercase px-2.5 py-1 rounded-md">
-                KASIR UTAMA
-              </span>
-              <h3 className="text-lg font-black tracking-tight mt-3 mb-2">Alur Kerja Real-Time</h3>
-              <p className="text-xs text-slate-400 leading-relaxed font-medium">
-                Setiap pesanan baru yang dikirim oleh pelanggan dari halaman menu utama akan langsung muncul di monitor ini secara instan tanpa perlu memuat ulang halaman *(Auto Sync)*.
-              </p>
-              <div className="mt-6 pt-4 border-t border-slate-800 flex items-center justify-between text-xs font-semibold text-slate-400">
-                <span>Total Antrean Gabungan:</span>
-                <span className="font-mono text-white text-sm font-bold bg-slate-800 px-2.5 py-1 rounded-lg">{orders.length} Pesanan</span>
-              </div>
-            </div>
-
-            <div className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm">
-              <h4 className="text-xs font-black text-slate-900 mb-3 flex items-center gap-1.5">
-                <span>💡</span> Panduan Singkat Kasir
-              </h4>
-              <ul className="space-y-2.5 text-[11px] text-slate-500 font-medium">
-                <li className="flex items-start gap-2">
-                  <span className="text-amber-500">⚡</span>
-                  <span>Gunakan tombol <strong>"Konfirmasi Lunas"</strong> apabila kasir telah menerima uang tunai atau verifikasi QRIS sukses.</span>
-                </li>
-                <li className="flex items-start gap-2">
-                  <span className="text-emerald-500">⚡</span>
-                  <span>Pesanan berlabel <span className="text-emerald-600 bg-emerald-50 px-1 rounded font-bold">Lunas</span> akan dihitung masuk ke dalam ringkasan grafik pendapatan kasir.</span>
-                </li>
-              </ul>
-            </div>
-          </div>
-
-          {/* COLUMN PANEL KANAN: STREAM DAFTAR ANTREAN MASUK */}
-          <main className="lg:col-span-8">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-base font-black tracking-tight text-slate-900 flex items-center gap-2">
-                📂 Live Feed Antrean Orderan Masuk
-              </h2>
-              <span className="text-[11px] font-bold text-slate-400">
-                Terakhir Diperbarui secara Otomatis
-              </span>
-            </div>
-
-            {orders.length === 0 ? (
-              /* KONDISI EMTPY STATE JIKA TIDAK ADA PESANAN */
-              <div className="bg-white border border-dashed border-slate-200 rounded-3xl p-16 text-center shadow-sm">
-                <div className="w-16 h-16 bg-slate-50 text-slate-400 rounded-2xl flex items-center justify-center text-3xl mx-auto mb-4">
-                  💤
-                </div>
-                <h3 className="text-sm font-black text-slate-800 mb-1">Belum Ada Pesanan Masuk</h3>
-                <p className="text-xs text-slate-400 max-w-sm mx-auto leading-relaxed">
-                  Silakan lakukan simulasi order dengan klik tombol "+ Order" dan selesaikan checkout pembayaran pada halaman menu pelanggan Anda.
-                </p>
-              </div>
-            ) : (
-              /* KONDISI BILA ANTREAN TERSEDIA */
-              <div className="space-y-4">
-                {orders.map((order) => (
-                  <div 
-                    key={order.id}
-                    className={`bg-white rounded-3xl border transition-all shadow-sm overflow-hidden ${
-                      order.status === 'Lunas' ? 'border-emerald-100 bg-emerald-50/10' : 'border-slate-100'
-                    }`}
-                  >
-                    {/* Header Item Kartu Order */}
-                    <div className="px-6 py-4 bg-slate-50/50 border-b border-slate-100 flex flex-wrap items-center justify-between gap-3">
-                      <div className="flex items-center gap-3">
-                        <span className="font-mono text-xs font-black text-slate-900 bg-white px-3 py-1.5 rounded-xl border border-slate-200/60 shadow-sm">
-                          {order.id}
-                        </span>
-                        <span className="text-[11px] text-slate-400 font-bold">
-                          ⏰ {order.timestamp}
-                        </span>
-                      </div>
-
-                      <div className="flex items-center gap-2.5">
-                        {/* Label Jenis Pembayaran */}
-                        <span className="text-[10px] font-extrabold px-2.5 py-1 rounded-lg bg-slate-100 text-slate-600 uppercase tracking-wider">
-                          {order.method === 'qris' ? '📱 QRIS Live' : '💵 Tunai / Cash'}
-                        </span>
-
-                        {/* Status badge lunas / belum */}
-                        <span className={`text-[10px] font-black px-3 py-1 rounded-lg uppercase tracking-widest ${
-                          order.status === 'Lunas' 
-                            ? 'bg-emerald-100 text-emerald-700' 
-                            : 'bg-amber-100 text-amber-700 animate-pulse'
-                        }`}>
-                          {order.status}
-                        </span>
-                      </div>
-                    </div>
-
-                    {/* Konten Item Makanan yang Dipesan */}
-                    <div className="p-6">
-                      <div className="divide-y divide-slate-50">
-                        {order.items.map((item, idx) => (
-                          <div key={idx} className="py-2.5 flex items-center justify-between first:pt-0 last:pb-0">
-                            <div className="flex items-center gap-3">
-                              <img 
-                                src={item.food.image} 
-                                alt={item.food.name} 
-                                className="w-10 h-10 object-cover rounded-xl border border-slate-100"
-                              />
-                              <div>
-                                <h4 className="text-xs font-black text-slate-900">{item.food.name}</h4>
-                                <p className="text-[10px] text-slate-400 font-medium">{item.food.origin}</p>
-                              </div>
-                            </div>
-                            <div className="text-right">
-                              <span className="text-xs font-mono font-bold text-slate-500 mr-4">
-                                x{item.quantity}
-                              </span>
-                              <span className="text-xs font-bold text-slate-900">
-                                Rp {(item.food.price * item.quantity).toLocaleString('id-ID')}
-                              </span>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-
-                      {/* Footer & Aksi Tombol */}
-                      <div className="mt-5 pt-4 border-t border-slate-100 flex items-center justify-between">
-                        <div>
-                          <p className="text-[9px] uppercase tracking-widest font-bold text-slate-400 mb-0.5">Total Tagihan</p>
-                          <span className="text-base font-black text-slate-900">
-                            Rp {order.total.toLocaleString('id-ID')}
-                          </span>
-                        </div>
-
-                        <div className="flex items-center gap-2">
-                          <button
-                            onClick={() => handleDeleteOrder(order.id)}
-                            className="p-2.5 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-xl border border-transparent hover:border-red-100 transition"
-                            title="Hapus / Selesaikan Pesanan"
-                          >
-                            🗑️
-                          </button>
-                          
-                          {order.status === 'Belum Bayar' && (
-                            <button
-                              onClick={() => handleMarkAsPaid(order.id)}
-                              className="bg-slate-950 hover:bg-emerald-600 text-white font-black text-xs px-4 py-2.5 rounded-xl shadow-sm transition"
-                            >
-                              ✓ Konfirmasi Lunas
-                            </button>
-                          )}
-                        </div>
-                      </div>
-
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </main>
-
+          <button 
+            onClick={() => {
+              if (confirm('Apakah Anda yakin ingin keluar dari halaman Kasir?')) {
+                localStorage.removeItem('token');
+                localStorage.removeItem('user');
+                router.push('/login');
+              }
+            }}
+            className="flex items-center gap-1.5 bg-red-50 hover:bg-red-100 text-red-600 hover:text-red-700 font-bold text-xs px-3.5 py-2 rounded-lg border border-red-200 transition-colors shadow-xs"
+          >
+            <span>🚪</span> Keluar
+          </button>
         </div>
       </div>
 
+      {/* Grid Informasi Ringkasan */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+        <div className="bg-white p-5 rounded-xl shadow-sm border border-gray-200">
+          <p className="text-xs font-bold text-gray-400 uppercase tracking-wider">Pesanan Belum Bayar</p>
+          <p className="text-4xl font-black text-orange-600 mt-1">{jumlahAntreanBelumBayar} <span className="text-sm font-normal text-gray-500">Antrean</span></p>
+        </div>
+        <div className="bg-white p-5 rounded-xl shadow-sm border border-gray-200">
+          <p className="text-xs font-bold text-gray-400 uppercase tracking-wider">Total Kas Masuk (Lunas)</p>
+          <p className="text-4xl font-black text-green-600 mt-1">Rp {totalKasMasuk.toLocaleString('id-ID')}</p>
+        </div>
+      </div>
+
+      {/* Konten Utama */}
+      <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6 pb-4 border-b border-gray-100">
+          <div>
+            <h2 className="text-base font-bold text-gray-900">Daftar Transaksi Pelanggan</h2>
+            <p className="text-xs text-gray-400">Sistem otomatis memuat pesanan baru secara real-time.</p>
+          </div>
+          
+          {/* Tab Navigasi Kategori */}
+          <div className="flex bg-gray-100 p-1 rounded-lg border border-gray-200 text-xs font-bold">
+            <button onClick={() => setFilterStatus('Belum Bayar')} className={`px-4 py-2 rounded-md transition-all ${filterStatus === 'Belum Bayar' ? 'bg-white text-orange-600 shadow-xs' : 'text-gray-500 hover:text-gray-900'}`}>Belum Bayar ({jumlahAntreanBelumBayar})</button>
+            <button onClick={() => setFilterStatus('Lunas')} className={`px-4 py-2 rounded-md transition-all ${filterStatus === 'Lunas' ? 'bg-white text-green-600 shadow-xs' : 'text-gray-500 hover:text-gray-900'}`}>Sudah Lunas</button>
+            <button onClick={() => setFilterStatus('Semua')} className={`px-4 py-2 rounded-md transition-all ${filterStatus === 'Semua' ? 'bg-white text-gray-800 shadow-xs' : 'text-gray-500 hover:text-gray-900'}`}>Semua Riwayat</button>
+          </div>
+        </div>
+
+        {/* List Data */}
+        <div className="space-y-4">
+          {listTersaring.length === 0 ? (
+            <div className="text-center py-12 text-sm text-gray-400 font-medium">Tidak ada antrean pesanan dalam kategori ini.</div>
+          ) : (
+            listTersaring.map((t) => (
+              <div key={t.id_pesanan} className={`p-4 rounded-xl border flex flex-col md:flex-row md:items-center justify-between gap-4 transition-all ${t.status_pesanan?.toLowerCase() === 'lunas' ? 'bg-gray-50/50 border-gray-200' : 'bg-orange-50/20 border-orange-200 shadow-xs'}`}>
+                <div className="flex items-start gap-4">
+                  <div className="bg-gray-900 text-white font-black text-center px-3 py-2 rounded-lg text-sm min-w-[55px]">
+                    <span className="text-[10px] block font-normal text-gray-400 uppercase">MEJA</span>
+                    {t.nomor_meja || '-'}
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h4 className="font-bold text-sm text-gray-900 uppercase">{t.nama_pelanggan || 'PELANGGAN'}</h4>
+                      <span className="text-[11px] text-gray-400 font-medium">({t.waktu || 'Baru'})</span>
+                    </div>
+                    
+                    {/* Render Detail Menggunakan Berbagai Alternatif Nama Properti */}
+                    <div className="flex flex-wrap gap-x-3 gap-y-1 mt-1 text-xs text-gray-600 font-medium">
+                      {t.detail && t.detail.length > 0 ? (
+                        t.detail.map((d, i) => {
+                          const itemQty = d.jumlah ?? d.qty ?? d.jumlah_pesanan ?? 1;
+                          const itemName = d.nama_menu ?? d.name ?? 'Menu';
+                          return (
+                            <span key={i} className="bg-white px-2 py-0.5 rounded border border-gray-200 text-gray-700">
+                              {itemQty}x <span className="font-bold text-gray-900">{itemName}</span>
+                            </span>
+                          );
+                        })
+                      ) : (
+                        <span className="text-gray-400 italic">Data menu kosong</span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between md:justify-end gap-6 pt-3 md:pt-0 border-t md:border-t-0 border-gray-100">
+                  <div className="text-left md:text-right">
+                    <span className="text-[10px] block font-bold text-gray-400 uppercase tracking-wider">
+                      {t.metode_pembayaran === 'QRIS' ? '📱 QRIS' : '💵 TUNAI'}
+                    </span>
+                    <span className="text-base font-black text-gray-900">Rp {(Number(t.total_harga) || 0).toLocaleString('id-ID')}</span>
+                  </div>
+                  
+                  {t.status_pesanan?.toLowerCase() === 'belum bayar' ? (
+                    <button onClick={() => konfirmasiLunas(t.id_pesanan)} className="bg-orange-600 hover:bg-orange-700 text-white font-bold text-xs px-5 py-2.5 rounded-lg transition-colors shadow-xs">
+                      Konfirmasi Lunas
+                    </button>
+                  ) : (
+                    <span className="bg-green-100 text-green-700 font-bold text-xs px-4 py-2 rounded-lg border border-green-200">
+                      ✓ Selesai
+                    </span>
+                  )}
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      </div>
     </div>
   );
 }

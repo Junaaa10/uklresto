@@ -7,12 +7,70 @@ import { useRouter } from 'next/navigation';
 export default function LoginPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  
+  // State Otentikasi Multi-Role untuk kebutuhan routing internal frontend Anda
+  const [role, setRole] = useState<'pelanggan' | 'admin' | 'kasir'>('pelanggan');
+  
   const router = useRouter();
 
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    // Simulasi login berhasil, langsung lempar ke beranda utama
-    router.push('/');
+    setIsLoading(true);
+
+    try {
+      // 1. Mengarah langsung ke single endpoint terpusat sesuai data cURL backend Anda
+      const response = await fetch('https://backend-kuliner.up.railway.app/api/auth/login', {
+        method: 'POST',
+        headers: {
+          'accept': '*/*',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          email: email, 
+          password: password,
+        }),
+      });
+
+      const contentType = response.headers.get("content-type");
+      if (!contentType || !contentType.includes("application/json")) {
+        throw new Error(`Server mengembalikan respon non-JSON (Status: ${response.status}). Pastikan backend berjalan aktif.`);
+      }
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.message || 'Email atau password salah!');
+      }
+
+      // 2. Menyimpan accessToken dan data user berdasarkan skema response asli backend
+      if (data.accessToken) {
+        localStorage.setItem('token', data.accessToken); // Menyimpan properti accessToken backend Anda
+      }
+      
+      localStorage.setItem('role', role);
+      
+      if (data.data) {
+        localStorage.setItem('user', JSON.stringify(data.data)); // Menyimpan objek data user (id, name, email, role)
+      }
+
+      alert(`Login Berhasil! Selamat datang kembali, ${data.data?.name || 'User'}.`);
+      
+      // 3. Routing pengalihan halaman internal Next.js berdasarkan hak akses peran (role frontend)
+      if (role === 'pelanggan') {
+        router.push('/menu');
+      } else if (role === 'kasir') {
+        router.push('/kasir');
+      } else if (role === 'admin') {
+        router.push('/admin');
+      }
+      
+      router.refresh();
+    } catch (error: any) {
+      alert(error.message || 'Terjadi kesalahan koneksi ke server.');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (
@@ -25,7 +83,7 @@ export default function LoginPage() {
       <div className="bg-white/95 backdrop-blur-md rounded-3xl max-w-md w-full p-8 md:p-10 shadow-2xl border border-white/20 transition-all duration-300 transform hover:scale-[1.01]">
         
         {/* Header Form */}
-        <div className="text-center mb-8">
+        <div className="text-center mb-6">
           <h2 className="text-3xl font-black text-gray-950 tracking-tight">
             Selamat <span className="text-orange-600">Datang</span>
           </h2>
@@ -37,10 +95,30 @@ export default function LoginPage() {
           </p>
         </div>
 
+        {/* Tab Selector Role terintegrasi */}
+        <div className="grid grid-cols-3 gap-2 mb-6 p-1 bg-gray-100 rounded-xl">
+          {(['pelanggan', 'admin', 'kasir'] as const).map((r) => (
+            <button
+              key={r}
+              type="button"
+              onClick={() => setRole(r)}
+              className={`py-2 text-xs font-bold rounded-lg uppercase tracking-wider transition-all ${
+                role === r 
+                  ? 'bg-gradient-to-r from-orange-600 to-amber-600 text-white shadow-sm' 
+                  : 'text-gray-500 hover:text-gray-800'
+              }`}
+            >
+              {r}
+            </button>
+          ))}
+        </div>
+
         {/* Form Input */}
         <form onSubmit={handleLogin} className="space-y-5">
           <div>
-            <label className="block text-xs font-bold text-gray-600 uppercase tracking-wider mb-1.5">Alamat Email</label>
+            <label className="block text-xs font-bold text-gray-600 uppercase tracking-wider mb-1.5">
+              Alamat Email / Username ({role})
+            </label>
             <input 
               type="email" 
               required 
@@ -77,9 +155,10 @@ export default function LoginPage() {
           {/* Tombol Submit Login */}
           <button 
             type="submit" 
-            className="w-full bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-700 hover:to-amber-700 text-white font-bold py-3.5 rounded-xl transition shadow-lg shadow-orange-600/20 active:scale-[0.99] mt-2 text-sm uppercase tracking-wider"
+            disabled={isLoading}
+            className="w-full bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-700 hover:to-amber-700 text-white font-bold py-3.5 rounded-xl transition shadow-lg shadow-orange-600/20 active:scale-[0.99] mt-2 text-sm uppercase tracking-wider disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            Masuk Sekarang
+            {isLoading ? 'Memproses...' : `Masuk Sebagai ${role}`}
           </button>
         </form>
 
